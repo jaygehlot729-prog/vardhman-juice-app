@@ -128,13 +128,15 @@ with tab_stock_view:
         if all_stock:
             for item in all_stock:
                 profit_per_piece = item[3] - item[2]
+                # FIX: Added 'color: #000000;' to make text visible in Dark Mode
                 st.markdown(f"""
-                <div style='background-color:#f8f9fa; padding:10px; border-radius:5px; margin-bottom:5px; border-left: 5px solid {"#28a745" if item[1] > 5 else "#dc3545"};'>
-                    <strong>{item[0]}</strong> <br>
-                    Stock Left: {item[1]} units | Margin per piece: ₹{profit_per_piece:.2f} (Bought: ₹{item[2]} ➔ Sell: ₹{item[3]})
+                <div style='background-color:#f8f9fa; color:#000000; padding:15px; border-radius:8px; margin-bottom:10px; border-left: 6px solid {"#28a745" if item[1] > 5 else "#dc3545"}; box-shadow: 0px 2px 4px rgba(0,0,0,0.1);'>
+                    <strong style='font-size: 18px;'>{item[0]}</strong> <br>
+                    <span style='color: #333333;'>Stock Left: <b>{item[1]} units</b> | Margin per piece: <b>₹{profit_per_piece:.2f}</b></span><br>
+                    <span style='font-size: 13px; color: #666666;'>(Bought: ₹{item[2]} ➔ Sell: ₹{item[3]})</span>
                 </div>
                 """, unsafe_allow_html=True)
         else:
-            st.write("Godaam khali hai bhai.")
+            st.write("Inventory is currently empty.")
     except Exception as e:
         st.error(f"Could not load inventory: {e}")
