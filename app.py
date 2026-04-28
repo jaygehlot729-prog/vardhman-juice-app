@@ -1,6 +1,8 @@
 import streamlit as st
 import psycopg2
 import urllib.parse
+from datetime import datetime
+import pytz
 
 # --- PAGE CONFIG ---
 st.set_page_config(page_title="Vardhman Juice Center", page_icon="🍹", layout="wide")
@@ -23,15 +25,15 @@ st.markdown("""
 <style>#MainMenu {visibility: hidden;} footer {visibility: hidden;} header {visibility: hidden;}</style>
 <div style="background: linear-gradient(135deg, #FF9A9E 0%, #FECFEF 100%); padding: 20px; border-radius: 15px; text-align: center; box-shadow: 0px 4px 15px rgba(0,0,0,0.1);">
     <h1 style="color: #2D3436; margin: 0; font-family: 'Arial Black', sans-serif;">🍹 VARDHMAN JUICE CENTER</h1>
-    <p style="color: #636E72; font-weight: bold; letter-spacing: 2px;">POS & DIGITAL KHATA</p>
+    <p style="color: #636E72; font-weight: bold; letter-spacing: 2px;">MASTER POS SYSTEM</p>
 </div>
 <br>
 """, unsafe_allow_html=True)
 
-# 4 TABS AB: POS, Inventory, Godaam, aur naya Udhar Khata
-tab_pos, tab_inventory, tab_stock_view, tab_udhar = st.tabs(["🛒 Quick Bill", "📦 Add Stock", "📊 Godaam", "📒 Udhar Khata"])
+# 5 TABS AB: POS, Godaam, View Stock, Khata, aur naya Galla
+tab_pos, tab_inventory, tab_stock_view, tab_udhar, tab_galla = st.tabs(["🛒 Bill", "📦 Stock", "📊 Godaam", "📒 Khata", "💰 Galla"])
 
-# --- TAB 1: POS (With Udhar Integration) ---
+# --- TAB 1: POS (Billing & Galla Entry) ---
 with tab_pos:
     st.subheader("⚡ Fast Billing")
     try:
@@ -63,7 +65,6 @@ with tab_pos:
             
             st.divider()
             
-            # --- PAYMENT METHOD ---
             pay_method = st.radio("💳 Payment Method", ["💸 Cash/UPI", "📝 Udhar (Credit)"], horizontal=True)
             cust_name, cust_phone = "", ""
             
@@ -75,14 +76,18 @@ with tab_pos:
                 with u_col2:
                     cust_phone = st.text_input("WhatsApp No. (Optional)")
             
-            if st.button("✅ Generate Bill & Deduct Stock", use_container_width=True):
+            if st.button("✅ Generate Bill", use_container_width=True):
                 if pay_method == "📝 Udhar (Credit)" and not cust_name.strip():
                     st.error("⚠️ Udhar ke liye naam likhna zaroori hai!")
                 elif current_stock >= qty or is_flexible:
                     # 1. Deduct Stock
                     cursor.execute("UPDATE inventory_master SET stock_qty = stock_qty - %s WHERE item_name = %s", (qty, selected_name))
                     
-                    # 2. Add to Udhar Khata (if selected)
+                    # 2. Add to Daily Sales (Galla)
+                    cursor.execute("INSERT INTO daily_sales (item_name, qty, amount, pay_mode) VALUES (%s, %s, %s, %s)", 
+                                   (selected_name, qty, total_bill, pay_method))
+                    
+                    # 3. Add to Udhar Khata (if selected)
                     if pay_method == "📝 Udhar (Credit)":
                         cursor.execute("""
                             INSERT INTO udhar_khata (customer_name, phone_number, total_due) 
@@ -91,9 +96,9 @@ with tab_pos:
                             DO UPDATE SET total_due = udhar_khata.total_due + EXCLUDED.total_due,
                                           phone_number = COALESCE(EXCLUDED.phone_number, udhar_khata.phone_number);
                         """, (cust_name, cust_phone, total_bill))
-                        st.success(f"Transaction Saved! ₹{total_bill} added to {cust_name}'s Khata.")
+                        st.success(f"✅ ₹{total_bill} added to {cust_name}'s Khata!")
                     else:
-                        st.success(f"Cash Transaction Saved! {qty}x {selected_name} sold.")
+                        st.success(f"✅ Cash Transaction Saved!")
                     st.balloons()
                 else:
                     st.error("⚠️ Stock is less than the quantity!")
@@ -102,7 +107,7 @@ with tab_pos:
     except Exception as e:
         st.error(f"Error: {e}")
 
-# --- TAB 2: ADD STOCK (Godaam Entry) ---
+# --- TAB 2 & 3: INVENTORY (Kept Same) ---
 with tab_inventory:
     st.subheader("📥 Master Stock Entry")
     with st.form("add_stock_form", clear_on_submit=True):
@@ -129,7 +134,6 @@ with tab_inventory:
                 """, (new_name, category, stock_added, purchase_price, selling_price, is_flex_val))
                 st.success("✅ Stock Updated!")
 
-# --- TAB 3: VIEW GODAAM ---
 with tab_stock_view:
     st.subheader("📊 Live Inventory")
     if st.button("🔄 Refresh Inventory"):
@@ -141,7 +145,7 @@ with tab_stock_view:
         if all_stock:
             for item in all_stock:
                 st.markdown(f"""
-                <div style='background-color:#f8f9fa; color:#000000; padding:15px; border-radius:8px; margin-bottom:10px; border-left: 6px solid {"#28a745" if item[1] > 5 else "#dc3545"}; box-shadow: 0px 2px 4px rgba(0,0,0,0.1);'>
+                <div style='background-color:#f8f9fa; color:#000000; padding:15px; border-radius:8px; margin-bottom:10px; border-left: 6px solid {"#28a745" if item[1] > 5 else "#dc3545"};'>
                     <strong style='font-size: 18px;'>{item[0]}</strong> <br>
                     <span style='color: #333333;'>Stock: <b>{item[1]}</b> | Margin: <b>₹{(item[3] - item[2]):.2f}</b></span>
                 </div>
@@ -149,59 +153,103 @@ with tab_stock_view:
     except Exception as e:
         st.error(f"Error: {e}")
 
-# --- TAB 4: UDHAR KHATA (THE NEW SYSTEM) ---
+# --- TAB 4: UDHAR KHATA ---
 with tab_udhar:
     st.subheader("📒 Digital Udhar Khata")
-    
     try:
         cursor = conn.cursor()
-        # Sirf unko dikhao jinka udhar baki hai (>0)
         cursor.execute("SELECT customer_name, phone_number, total_due FROM udhar_khata WHERE total_due > 0 ORDER BY total_due DESC")
         udhar_list = cursor.fetchall()
         
-        # Settle Payment Section
-        st.markdown("### 💰 Receive Payment (Jama Karein)")
         if udhar_list:
             khata_names = [u[0] for u in udhar_list]
+            st.markdown("### 💰 Receive Payment")
             settle_col1, settle_col2 = st.columns(2)
             with settle_col1:
                 settle_name = st.selectbox("Select Customer", khata_names)
             with settle_col2:
-                # Find current due for selected customer
                 current_due = next(u[2] for u in udhar_list if u[0] == settle_name)
                 st.info(f"Pending: ₹{current_due}")
                 
             amount_received = st.number_input("Amount Received (₹)", min_value=1.0, max_value=float(current_due), step=1.0)
-            
-            if st.button("📥 Jama Karlein (Deduct from Khata)", use_container_width=True):
+            if st.button("📥 Jama Karlein", use_container_width=True):
                 cursor.execute("UPDATE udhar_khata SET total_due = total_due - %s WHERE customer_name = %s", (amount_received, settle_name))
-                st.success(f"✅ ₹{amount_received} received from {settle_name}. Remaining due updated!")
+                st.success(f"✅ ₹{amount_received} received from {settle_name}.")
                 st.rerun()
-                
+            
             st.divider()
-            
-            # View All Pending Khata
             st.markdown("### 🔴 Pending Accounts")
-            market_total = sum([u[2] for u in udhar_list])
-            st.error(f"**Total Paisa Market Mein Hai: ₹{market_total}**")
-            
+            st.error(f"**Total Market Udhar: ₹{sum([u[2] for u in udhar_list])}**")
             for u in udhar_list:
-                c_name, c_phone, c_due = u[0], u[1], u[2]
-                st.markdown(f"""
-                <div style='background-color:#FFF3CD; color:#856404; padding:15px; border-radius:8px; margin-bottom:10px; border-left: 6px solid #FFC107; box-shadow: 0px 2px 4px rgba(0,0,0,0.1);'>
-                    <strong style='font-size: 18px;'>👤 {c_name}</strong> <br>
-                    <span style='font-size: 20px; font-weight: bold;'>Baki Hai: ₹{c_due}</span>
-                </div>
-                """, unsafe_allow_html=True)
-                
-                # WhatsApp Reminder Button
-                if c_phone:
-                    msg = f"Namaste {c_name} ji,\nVardhman Juice Center se aapka ₹{c_due} ka udhar baki hai. Kripya samay milne par jama karwa dein. 🙏"
-                    wa_url = f"https://wa.me/91{c_phone}?text={urllib.parse.quote(msg)}"
-                    st.markdown(f'<a href="{wa_url}" target="_blank" style="display: inline-block; background-color: #25D366; color: white; padding: 8px 12px; border-radius: 5px; text-decoration: none; font-size: 14px; margin-bottom: 15px;">📲 Send Reminder</a>', unsafe_allow_html=True)
-                
+                st.markdown(f"<div style='background-color:#FFF3CD; color:#856404; padding:10px; border-radius:5px; margin-bottom:5px; border-left: 5px solid #FFC107;'><strong>{u[0]}</strong>: Baki ₹{u[2]}</div>", unsafe_allow_html=True)
         else:
-            st.success("🎉 Market mein koi udhar baki nahi hai!")
-            
+            st.success("🎉 Koi udhar baki nahi hai!")
     except Exception as e:
         st.error(f"Khata Error: {e}")
+
+# --- TAB 5: AAJ KA GALLA (NEW) ---
+with tab_galla:
+    st.subheader("💰 Aaj Ka Galla (Daily Report)")
+    
+    # Refresh Button
+    if st.button("🔄 Refresh Galla"):
+        st.rerun()
+        
+    try:
+        cursor = conn.cursor()
+        # Aaj ki date nikalna (Indian Time ke hisaab se timezone safe)
+        cursor.execute("""
+            SELECT pay_mode, SUM(amount) 
+            FROM daily_sales 
+            WHERE sale_date = (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata')::date 
+            GROUP BY pay_mode
+        """)
+        sales_data = cursor.fetchall()
+        
+        total_cash = 0
+        total_udhar = 0
+        
+        for row in sales_data:
+            if row[0] == '💸 Cash/UPI':
+                total_cash = row[1]
+            elif row[0] == '📝 Udhar (Credit)':
+                total_udhar = row[1]
+        
+        grand_total = total_cash + total_udhar
+        
+        # Display Metric Cards
+        st.markdown(f"""
+        <div style='display: flex; gap: 10px; margin-bottom: 20px;'>
+            <div style='flex: 1; background-color:#d4edda; color:#155724; padding:20px; border-radius:10px; text-align:center; box-shadow: 0px 4px 6px rgba(0,0,0,0.1);'>
+                <h3 style='margin:0; font-size:16px;'>💸 Cash / UPI (Galla)</h3>
+                <h1 style='margin:0; font-size:32px;'>₹{total_cash}</h1>
+            </div>
+            <div style='flex: 1; background-color:#f8d7da; color:#721c24; padding:20px; border-radius:10px; text-align:center; box-shadow: 0px 4px 6px rgba(0,0,0,0.1);'>
+                <h3 style='margin:0; font-size:16px;'>📝 Udhar (Credit)</h3>
+                <h1 style='margin:0; font-size:32px;'>₹{total_udhar}</h1>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        st.info(f"**Total Bikri Aaj Ki (Cash + Udhar): ₹{grand_total}**")
+        
+        st.divider()
+        st.markdown("### 🛒 Aaj Kya-Kya Bika?")
+        
+        # Detailed item list
+        cursor.execute("""
+            SELECT item_name, SUM(qty), SUM(amount) 
+            FROM daily_sales 
+            WHERE sale_date = (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata')::date 
+            GROUP BY item_name ORDER BY SUM(qty) DESC
+        """)
+        items_sold = cursor.fetchall()
+        
+        if items_sold:
+            for item in items_sold:
+                st.markdown(f"🔸 **{item[0]}** - Bika: {item[1]} unit (Total: ₹{item[2]})")
+        else:
+            st.write("Aaj abhi tak koi bill nahi bana hai (Boni baaki hai!)")
+            
+    except Exception as e:
+        st.error(f"Error fetching Galla: {e}")
