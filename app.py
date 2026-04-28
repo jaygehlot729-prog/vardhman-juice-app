@@ -1,120 +1,88 @@
 import streamlit as st
-import mysql.connector
+import psycopg2
 import urllib.parse
 
-# --- PAGE CONFIGURATION ---
-st.set_page_config(page_title="Vardhman Juice Center", page_icon="🍹", layout="wide", initial_sidebar_state="collapsed")
+# --- PAGE CONFIG ---
+st.set_page_config(page_title="Vardhman Juice Center", page_icon="🍹", layout="wide")
 
-# --- PREMIUM CUSTOM CSS ---
-st.markdown("""
-<style>
-    #MainMenu {visibility: hidden;} footer {visibility: hidden;} header {visibility: hidden;}
-    .premium-header {
-        background: linear-gradient(135deg, #FF9A9E 0%, #FECFEF 99%, #FECFEF 100%);
-        padding: 20px; border-radius: 15px; text-align: center;
-        box-shadow: 0px 4px 15px rgba(0,0,0,0.1); margin-bottom: 20px;
-    }
-    .shop-title { font-size: 38px; font-weight: 900; color: #2D3436; margin: 0; font-family: 'Arial Black', sans-serif; }
-    .shop-subtitle { font-size: 14px; color: #636E72; font-weight: 600; letter-spacing: 2px; }
-    .alert-box { background-color: #FFEEEE; border-left: 5px solid #FF4B4B; padding: 10px; border-radius: 5px; margin-bottom: 10px;}
-</style>
-""", unsafe_allow_html=True)
+# --- SECURE DATABASE CONNECTION ---
+@st.cache_resource
+def init_connection():
+    # Ye cloud database (Supabase) se connect karega
+    return psycopg2.connect(st.secrets["DATABASE_URL"])
 
+try:
+    conn = init_connection()
+except Exception as e:
+    st.error(f"Database connect nahi hua, settings check karo: {e}")
+    st.stop()
+
+# --- HEADER (Premium Look) ---
 st.markdown("""
-<div class="premium-header">
-    <p class="shop-title">🍹 VARDHMAN JUICE CENTER</p>
-    <p class="shop-subtitle">100% FRESH • PREMIUM QUALITY</p>
+<style>#MainMenu {visibility: hidden;} footer {visibility: hidden;} header {visibility: hidden;}</style>
+<div style="background: linear-gradient(135deg, #FF9A9E 0%, #FECFEF 100%); padding: 20px; border-radius: 15px; text-align: center; box-shadow: 0px 4px 15px rgba(0,0,0,0.1);">
+    <h1 style="color: #2D3436; margin: 0; font-family: 'Arial Black', sans-serif;">🍹 VARDHMAN JUICE CENTER</h1>
+    <p style="color: #636E72; font-weight: bold; letter-spacing: 2px;">LIVE CLOUD POS SYSTEM</p>
 </div>
+<br>
 """, unsafe_allow_html=True)
 
-# --- MOCK DATA ---
-in_stock_items = ["Lays Indian Magic Masala (₹10)", "Balaji Wafers (₹10)", "Amul Lassi (₹25)", "Mix Fruit Juice (₹40)", "Frooti (₹20)"]
+tab_pos, tab_master = st.tabs(["🛒 Quick Billing", "🛠️ Add New Items"])
 
-# --- DASHBOARD TABS ---
-tab_pos, tab_inventory, tab_credit, tab_reports = st.tabs([
-    "🛍️ Point of Sale", "📦 Inventory & Alerts", "📒 Udhar Khata", "📊 End of Day (Galla)"
-])
-
-# --- TAB 1: POINT OF SALE (With WhatsApp Billing) ---
+# --- TAB 1: POS (Fetching from Cloud) ---
 with tab_pos:
-    st.subheader("⚡ Fast Billing System")
+    st.subheader("⚡ Fast Billing")
     
-    with st.form("sale_form", clear_on_submit=False):
-        selected_item = st.selectbox("Select Product", in_stock_items)
-        col1, col2 = st.columns(2)
-        with col1:
-            quantity = st.number_input("Quantity Sold", min_value=1, step=1)
-        with col2:
-            price_per_item = st.number_input("Price per item (₹)", min_value=1.0, value=10.0, step=1.0)
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT item_name, selling_price, is_juice FROM products")
+        db_items = cursor.fetchall() 
+        
+        if db_items:
+            item_names = [item[0] for item in db_items]
+            selected_name = st.selectbox("🔍 Search & Select Product", item_names)
             
-        total_bill = quantity * price_per_item
-        st.info(f"**Total Payable: ₹{total_bill}**")
-        
-        st.divider()
-        
-        pay_col1, pay_col2 = st.columns(2)
-        with pay_col1:
-            payment_type = st.radio("Payment Method", ["💸 Cash", "📱 UPI (PhonePe/GPay)", "📝 Credit (Udhar)"])
-        with pay_col2:
-            if payment_type == "📝 Credit (Udhar)":
-                customer = st.text_input("Enter Customer Name (Udhar)")
-                cust_phone = st.text_input("Customer WhatsApp No. (Optional)")
-            else:
-                customer = "Walk-in Customer"
-                cust_phone = st.text_input("Customer WhatsApp No. (For Digital Bill)")
-                
-        submit_sale = st.form_submit_button("✅ Generate Bill", use_container_width=True)
-        
-    # Actions outside the form so WhatsApp link can render
-    if submit_sale:
-        if payment_type == "📝 Credit (Udhar)" and not customer.strip():
-            st.error("⚠️ Please enter the customer's name for Udhar!")
+            current_item = next(item for item in db_items if item[0] == selected_name)
+            base_price = float(current_item[1])
+            is_juice = current_item[2]
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                qty = st.number_input("Quantity", min_value=1, step=1)
+            with col2:
+                if is_juice:
+                    final_price = st.number_input("Price (Discountable)", value=base_price, step=1.0)
+                else:
+                    st.info(f"🔒 Fixed Price: ₹{base_price}")
+                    final_price = base_price
+            
+            total_bill = qty * final_price
+            st.success(f"### Total Bill: ₹{total_bill}")
+            
+            if st.button("✅ Generate VIP Bill", use_container_width=True):
+                msg = f"🧾 *VARDHMAN JUICE CENTER*\n\n*Item:* {selected_name}\n*Qty:* {qty}\n*Total:* ₹{total_bill}\n\n_Thank you for visiting!_ 🍹"
+                wa_url = f"https://wa.me/?text={urllib.parse.quote(msg)}"
+                st.markdown(f'<a href="{wa_url}" target="_blank" style="display: block; text-align: center; background-color: #25D366; color: white; padding: 12px; border-radius: 8px; text-decoration: none; font-weight: bold;">📲 Send Bill on WhatsApp</a>', unsafe_allow_html=True)
         else:
-            st.success(f"Transaction Successful! ₹{total_bill} collected via {payment_type}.")
-            
-            # 🚀 NEW FEATURE: WHATSAPP DIGITAL BILL GENERATION
-            bill_message = f"🧾 *VARDHMAN JUICE CENTER*\n\nThank you for your visit, {customer}!\n\n*Item:* {selected_item}\n*Qty:* {quantity}\n*Total Bill:* ₹{total_bill}\n*Paid via:* {payment_type}\n\n_Have a great day!_ 🍹"
-            encoded_msg = urllib.parse.quote(bill_message)
-            
-            # If phone number is provided, send to that number. Else, open WhatsApp to choose contact.
-            if cust_phone:
-                wa_url = f"https://wa.me/91{cust_phone}?text={encoded_msg}"
-            else:
-                wa_url = f"https://wa.me/?text={encoded_msg}"
-                
-            st.markdown(f'<a href="{wa_url}" target="_blank" style="display: block; text-align: center; background-color: #25D366; color: white; padding: 12px; border-radius: 8px; text-decoration: none; font-weight: bold; font-size: 16px;">📲 Send Digital Bill via WhatsApp</a>', unsafe_allow_html=True)
+            st.warning("Khali hai! Pehle 'Add New Items' mein jao aur saaman add karo.")
+    except Exception as e:
+        st.error(f"Error: {e}")
 
-# --- TAB 2: INVENTORY & ALERTS ---
-with tab_inventory:
-    st.subheader("⚠️ Low Stock Alerts")
-    # 🚀 NEW FEATURE: LOW STOCK WARNINGS
-    st.markdown('<div class="alert-box">🔴 <b>Amul Lassi</b> is running low! (Only 2 left in stock)</div>', unsafe_allow_html=True)
-    st.markdown('<div class="alert-box">🔴 <b>Lays Magic Masala</b> is out of stock! (0 left)</div>', unsafe_allow_html=True)
-    
-    st.divider()
-    st.subheader("📥 Add New Stock")
-    st.info("Stock entry system is active. (Supplier forms from previous version will go here).")
-
-# --- TAB 3: CREDIT LEDGER (Udhar Khata) ---
-with tab_credit:
-    st.subheader("📒 Market Ledger")
-    st.info("Customer and Supplier Udhar management is active.")
-
-# --- TAB 4: END OF DAY (Galla / Closing) ---
-with tab_reports:
-    st.subheader("💰 End of Day Calculation (Galla)")
-    
-    # 🚀 NEW FEATURE: GALLLA TALLY FOR INDIAN SHOPS
-    st.markdown("Check your cash drawer against the system data before closing the shop.")
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        st.metric(label="Total Cash Expected in Galla 💸", value="₹850")
-    with col2:
-        st.metric(label="Total UPI/Online Received 📱", value="₹1,200")
+# --- TAB 2: ADD ITEMS TO CLOUD ---
+with tab_master:
+    st.subheader("🆕 Add New Item to Shop")
+    with st.form("add_item", clear_on_submit=True):
+        new_name = st.text_input("Item Name")
+        new_brand = st.selectbox("Brand", ["Lays", "Amul", "Coke", "Fresh Juice", "Other"])
+        new_price = st.number_input("Selling Price (₹)", min_value=0.0, step=1.0)
+        item_type = st.radio("Type", ["Locked (MRP)", "Editable (Juice)"])
         
-    st.metric(label="Total Udhar Given Today 📝", value="₹150")
-    
-    st.divider()
-    if st.button("🔒 Close Day & Save Report", use_container_width=True):
-        st.success("Day closed successfully. Reports saved to database!")
+        is_juice_val = True if item_type == "Editable (Juice)" else False
+        
+        if st.form_submit_button("➕ Save to Cloud", use_container_width=True):
+            if new_name:
+                cursor = conn.cursor()
+                cursor.execute("INSERT INTO products (item_name, brand, selling_price, is_juice) VALUES (%s, %s, %s, %s)", 
+                               (new_name, new_brand, new_price, is_juice_val))
+                conn.commit()
+                st.success(f"✅ {new_name} added to Cloud!")
