@@ -30,7 +30,7 @@ st.markdown("""
 <br>
 """, unsafe_allow_html=True)
 
-# 6 TABS AB: POS, Add Stock, Edit/Fix, Godaam, Khata, Galla
+# 6 TABS: POS, Add Stock, Edit/Fix, Godaam, Khata, Galla
 tab_pos, tab_inventory, tab_edit, tab_stock_view, tab_udhar, tab_galla = st.tabs(["🛒 Bill", "📦 Add Stock", "✏️ Fix/Edit", "📊 Godaam", "📒 Khata", "💰 Galla"])
 
 # --- BRAND CATEGORIES ---
@@ -136,10 +136,9 @@ with tab_inventory:
                 """, (new_name, category, stock_added, purchase_price, selling_price, is_flex_val))
                 st.success("✅ Stock Updated Successfully!")
 
-# --- TAB 3: EDIT / FIX ITEMS (THE NEW UPDATE) ---
+# --- TAB 3: EDIT / FIX ITEMS ---
 with tab_edit:
     st.subheader("✏️ Edit or Delete Items (Galti Theek Karein)")
-    st.info("Agar koi naam, price, ya quantity galat type ho gayi hai, toh yahan se theek karein.")
     try:
         cursor = conn.cursor()
         cursor.execute("SELECT item_name, category, stock_qty, purchase_price, selling_price FROM inventory_master ORDER BY item_name ASC")
@@ -148,39 +147,36 @@ with tab_edit:
         if edit_items:
             item_names_edit = [item[0] for item in edit_items]
             selected_edit_name = st.selectbox("🔍 Select Item to Fix", item_names_edit, key="edit_select")
-            
             curr_item = next(item for item in edit_items if item[0] == selected_edit_name)
             
             st.markdown(f"**Current Stock:** {curr_item[2]} units | **Current Sell Price:** ₹{curr_item[4]}")
             
             new_edit_name = st.text_input("Edit Item Name", value=curr_item[0], key="edit_name")
-            
             try:
                 cat_index = BRAND_LIST.index(curr_item[1])
             except ValueError:
-                cat_index = len(BRAND_LIST) - 1 # Defaults to 'Others'
+                cat_index = len(BRAND_LIST) - 1
                 
             new_edit_category = st.selectbox("Edit Brand/Category", BRAND_LIST, index=cat_index, key="edit_cat")
-            new_edit_stock = st.number_input("Correct Stock Quantity (Replace old qty)", value=int(curr_item[2]), step=1, key="edit_qty")
+            new_edit_stock = st.number_input("Correct Stock Quantity", value=int(curr_item[2]), step=1, key="edit_qty")
             new_edit_pp = st.number_input("Correct Purchase Price (₹)", value=float(curr_item[3]), step=1.0, key="edit_pp")
             new_edit_sp = st.number_input("Correct Selling Price (₹)", value=float(curr_item[4]), step=1.0, key="edit_sp")
             
             col1, col2 = st.columns(2)
             with col1:
-                if st.button("💾 Update Item Details", use_container_width=True, type="primary"):
+                if st.button("💾 Update Details", use_container_width=True, type="primary"):
                     cursor.execute("""
                         UPDATE inventory_master 
                         SET item_name=%s, category=%s, stock_qty=%s, purchase_price=%s, selling_price=%s
                         WHERE item_name=%s
                     """, (new_edit_name, new_edit_category, new_edit_stock, new_edit_pp, new_edit_sp, selected_edit_name))
-                    st.success(f"✅ {new_edit_name} ki details successfully update ho gayi hain! (Refresh karke check karein)")
-                    
+                    st.success(f"✅ Details updated! Refresh page to see changes.")
             with col2:
-                if st.button("🗑️ Delete Entire Item", use_container_width=True):
+                if st.button("🗑️ Delete Item", use_container_width=True):
                     cursor.execute("DELETE FROM inventory_master WHERE item_name=%s", (selected_edit_name,))
-                    st.error(f"🗑️ {selected_edit_name} godaam se poori tarah delete ho gaya hai!")
+                    st.error(f"🗑️ Deleted from godaam!")
         else:
-            st.write("Godaam mein abhi koi item nahi hai.")
+            st.write("Godaam is empty.")
     except Exception as e:
         st.error(f"Error: {e}")
 
@@ -238,7 +234,7 @@ with tab_udhar:
     except Exception as e:
         st.error(f"Khata Error: {e}")
 
-# --- TAB 6: AAJ KA GALLA ---
+# --- TAB 6: AAJ KA GALLA & RETURNS ---
 with tab_galla:
     st.subheader("💰 Aaj Ka Galla (Daily Report)")
     if st.button("🔄 Refresh Galla"):
@@ -246,6 +242,44 @@ with tab_galla:
         
     try:
         cursor = conn.cursor()
+        
+        # --- RETURN / CANCEL SECTION ---
+        st.markdown("### ↩️ Return Item / Cancel Entry")
+        st.info("Galat bill yahan se delete karein. Saaman wapas stock mein chala jayega.")
+        
+        # Fetch today's individual bills
+        cursor.execute("""
+            SELECT id, item_name, qty, amount, pay_mode 
+            FROM daily_sales 
+            WHERE sale_date = (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata')::date 
+            ORDER BY id DESC
+        """)
+        todays_bills = cursor.fetchall()
+        
+        if todays_bills:
+            # Create a dictionary for dropdown options
+            bill_dict = {f"Cancel: {b[2]}x {b[1]} - ₹{b[3]} ({b[4]})": b for b in todays_bills}
+            selected_bill_str = st.selectbox("Select Bill to Cancel", list(bill_dict.keys()))
+            selected_b = bill_dict[selected_bill_str]
+            
+            if st.button("🗑️ Cancel Entry & Return Stock", type="primary"):
+                b_id, b_name, b_qty, b_amt, b_paymode = selected_b
+                
+                # 1. Delete from daily sales (Galla)
+                cursor.execute("DELETE FROM daily_sales WHERE id = %s", (b_id,))
+                
+                # 2. Add stock back to inventory (Godaam)
+                cursor.execute("UPDATE inventory_master SET stock_qty = stock_qty + %s WHERE item_name = %s", (b_qty, b_name))
+                
+                st.success(f"✅ Return Successful! {b_qty} piece '{b_name}' wapas stock mein add ho gaye hain.")
+                if "Udhar" in b_paymode:
+                    st.warning(f"⚠️ Dhyan Dein: Ye Udhar ki entry thi. Galla aur Stock theek ho gaya hai, par 'Khata' tab mein jaakar us grahak ke account mein ₹{b_amt} ka 'Jama' khud se kar lein.")
+        else:
+            st.write("Aaj abhi tak koi bill nahi bana hai return karne ke liye.")
+            
+        st.divider()
+        
+        # --- GALLA SUMMARY SECTION ---
         cursor.execute("""
             SELECT pay_mode, SUM(amount) 
             FROM daily_sales 
@@ -287,7 +321,5 @@ with tab_galla:
         if items_sold:
             for item in items_sold:
                 st.markdown(f"🔸 **{item[0]}** - Bika: {item[1]} unit (Total: ₹{item[2]})")
-        else:
-            st.write("Aaj abhi tak koi bill nahi bana hai (Boni baaki hai!)")
     except Exception as e:
         st.error(f"Error fetching Galla: {e}")
